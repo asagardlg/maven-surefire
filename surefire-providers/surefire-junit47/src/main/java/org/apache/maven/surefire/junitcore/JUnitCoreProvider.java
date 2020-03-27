@@ -42,6 +42,15 @@ import org.apache.maven.surefire.util.TestsToRun;
 import org.junit.runner.Description;
 import org.junit.runner.manipulation.Filter;
 
+import javax.swing.filechooser.FileNameExtensionFilter;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Files;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -58,10 +67,9 @@ import static org.apache.maven.surefire.util.TestsToRun.fromClass;
 /**
  * @author Kristian Rosenvold
  */
-@SuppressWarnings( { "UnusedDeclaration" } )
+@SuppressWarnings({"UnusedDeclaration"})
 public class JUnitCoreProvider
-    extends AbstractProvider
-{
+        extends AbstractProvider {
     private final ClassLoader testClassLoader;
 
     private final JUnitCoreParameters jUnitCoreParameters;
@@ -86,211 +94,195 @@ public class JUnitCoreProvider
 
     private TestsToRun testsToRun;
 
-    public JUnitCoreProvider( ProviderParameters bootParams )
-    {
+    public JUnitCoreProvider(ProviderParameters bootParams) {
         // don't start a thread in CommandReader while we are in in-plugin process
-        commandsReader = bootParams.isInsideFork() ? getReader().setShutdown( bootParams.getShutdown() ) : null;
+        commandsReader = bootParams.isInsideFork() ? getReader().setShutdown(bootParams.getShutdown()) : null;
         providerParameters = bootParams;
         testClassLoader = bootParams.getTestClassLoader();
         scanResult = bootParams.getScanResult();
         runOrderCalculator = bootParams.getRunOrderCalculator();
-        jUnitCoreParameters = new JUnitCoreParameters( bootParams.getProviderProperties() );
-        scannerFilter = new JUnit48TestChecker( testClassLoader );
+        jUnitCoreParameters = new JUnitCoreParameters(bootParams.getProviderProperties());
+        scannerFilter = new JUnit48TestChecker(testClassLoader);
         testResolver = bootParams.getTestRequest().getTestListResolver();
         rerunFailingTestsCount = bootParams.getTestRequest().getRerunFailingTestsCount();
-        customRunListeners = bootParams.getProviderProperties().get( "listener" );
-        jUnit48Reflector = new JUnit48Reflector( testClassLoader );
+        customRunListeners = bootParams.getProviderProperties().get("listener");
+        jUnit48Reflector = new JUnit48Reflector(testClassLoader);
     }
 
     @Override
-    public Iterable<Class<?>> getSuites()
-    {
+    public Iterable<Class<?>> getSuites() {
         testsToRun = scanClassPath();
         return testsToRun;
     }
 
-    private boolean isSingleThreaded()
-    {
+    private boolean isSingleThreaded() {
         return jUnitCoreParameters.isNoThreading();
     }
 
     @Override
-    public RunResult invoke( Object forkTestSet )
-        throws TestSetFailedException
-    {
+    public RunResult invoke(Object forkTestSet)
+            throws TestSetFailedException {
         final ReporterFactory reporterFactory = providerParameters.getReporterFactory();
 
         final ConsoleStream consoleStream = providerParameters.getConsoleLogger();
 
         Notifier notifier =
-            new Notifier( createRunListener( reporterFactory, consoleStream ), getSkipAfterFailureCount() );
+                new Notifier(createRunListener(reporterFactory, consoleStream), getSkipAfterFailureCount());
         // startCapture() called in createRunListener() in prior to setTestsToRun()
 
         Filter filter = jUnit48Reflector.isJUnit48Available() ? createJUnit48Filter() : null;
 
-        if ( testsToRun == null )
-        {
-            setTestsToRun( forkTestSet );
+        if (testsToRun == null) {
+            setTestsToRun(forkTestSet);
         }
 
         // Add test failure listener
         JUnitTestFailureListener testFailureListener = new JUnitTestFailureListener();
-        notifier.addListener( testFailureListener );
+        notifier.addListener(testFailureListener);
 
-        if ( isFailFast() && commandsReader != null )
-        {
-            registerPleaseStopJUnitListener( notifier );
+        if (isFailFast() && commandsReader != null) {
+            registerPleaseStopJUnitListener(notifier);
         }
 
         final RunResult runResult;
 
-        try
-        {
-            JUnitCoreWrapper core = new JUnitCoreWrapper( notifier, jUnitCoreParameters, consoleStream );
+        try {
+            JUnitCoreWrapper core = new JUnitCoreWrapper(notifier, jUnitCoreParameters, consoleStream);
 
-            if ( commandsReader != null )
-            {
-                registerShutdownListener( testsToRun );
+            if (commandsReader != null) {
+                registerShutdownListener(testsToRun);
                 commandsReader.awaitStarted();
             }
 
-            notifier.asFailFast( isFailFast() );
-            core.execute( testsToRun, createCustomListeners( customRunListeners ), filter );
-            notifier.asFailFast( false );
+            notifier.asFailFast(isFailFast());
+            core.execute(testsToRun, createCustomListeners(customRunListeners), filter);
+            notifier.asFailFast(false);
 
             // Rerun failing tests if rerunFailingTestsCount is larger than 0
-            if ( isRerunFailingTests() )
-            {
+            if (isRerunFailingTests()) {
                 Notifier rerunNotifier = pureNotifier();
-                notifier.copyListenersTo( rerunNotifier );
-                JUnitCoreWrapper rerunCore = new JUnitCoreWrapper( rerunNotifier, jUnitCoreParameters, consoleStream );
-                for ( int i = 0; i < rerunFailingTestsCount && !testFailureListener.getAllFailures().isEmpty(); i++ )
-                {
-                    Set<Description> failures = generateFailingTestDescriptions( testFailureListener.getAllFailures() );
+                notifier.copyListenersTo(rerunNotifier);
+                JUnitCoreWrapper rerunCore = new JUnitCoreWrapper(rerunNotifier, jUnitCoreParameters, consoleStream);
+                for (int i = 0; i < rerunFailingTestsCount && !testFailureListener.getAllFailures().isEmpty(); i++) {
+                    Set<Description> failures = generateFailingTestDescriptions(testFailureListener.getAllFailures());
                     testFailureListener.reset();
-                    FilterFactory filterFactory = new FilterFactory( testClassLoader );
-                    Filter failureDescriptionFilter = filterFactory.createMatchAnyDescriptionFilter( failures );
-                    rerunCore.execute( testsToRun, failureDescriptionFilter );
+                    FilterFactory filterFactory = new FilterFactory(testClassLoader);
+                    Filter failureDescriptionFilter = filterFactory.createMatchAnyDescriptionFilter(failures);
+                    rerunCore.execute(testsToRun, failureDescriptionFilter);
                 }
             }
-        }
-        finally
-        {
+        } finally {
             runResult = reporterFactory.close();
             notifier.removeListeners();
+            try {
+                StringBuilder builder = new StringBuilder();
+                File dir = new File(".");
+                PrintWriter pw = new PrintWriter(new FileOutputStream("target/cucumber.json",false));
+                pw.println("[");
+                File[] fileNames = dir.listFiles();
+                for (File file: fileNames) {
+                    String content ="";
+                    if (file.getName().matches("[0-9].json")) {
+                        content= new String(Files.readAllBytes(file.toPath()));
+                        content = content.substring(1, content.length()-2);
+                        builder.append(content);
+                        builder.append(",");
+                    }
+                }
+                builder.deleteCharAt(builder.length()-1);
+                pw.println(builder);
+                pw.println("]");
+                pw.close();
+            } catch (IOException ioe) {
+                ioe.printStackTrace();
+            }
         }
         return runResult;
     }
 
-    private void setTestsToRun( Object forkTestSet )
-        throws TestSetFailedException
-    {
-        if ( forkTestSet instanceof TestsToRun )
-        {
+    private void setTestsToRun(Object forkTestSet)
+            throws TestSetFailedException {
+        if (forkTestSet instanceof TestsToRun) {
             testsToRun = (TestsToRun) forkTestSet;
-        }
-        else if ( forkTestSet instanceof Class )
-        {
+        } else if (forkTestSet instanceof Class) {
             Class<?> theClass = (Class<?>) forkTestSet;
-            testsToRun = fromClass( theClass );
-        }
-        else
-        {
+            testsToRun = fromClass(theClass);
+        } else {
             testsToRun = scanClassPath();
         }
     }
 
-    private boolean isRerunFailingTests()
-    {
+    private boolean isRerunFailingTests() {
         return rerunFailingTestsCount > 0;
     }
 
-    private boolean isFailFast()
-    {
+    private boolean isFailFast() {
         return providerParameters.getSkipAfterFailureCount() > 0;
     }
 
-    private int getSkipAfterFailureCount()
-    {
+    private int getSkipAfterFailureCount() {
         return isFailFast() ? providerParameters.getSkipAfterFailureCount() : 0;
     }
 
-    private void registerShutdownListener( final TestsToRun testsToRun )
-    {
-        commandsReader.addShutdownListener( new CommandListener()
-        {
+    private void registerShutdownListener(final TestsToRun testsToRun) {
+        commandsReader.addShutdownListener(new CommandListener() {
             @Override
-            public void update( Command command )
-            {
+            public void update(Command command) {
                 testsToRun.markTestSetFinished();
             }
-        } );
+        });
     }
 
-    private void registerPleaseStopJUnitListener( final Notifier stoppable )
-    {
-        commandsReader.addSkipNextTestsListener( new CommandListener()
-        {
+    private void registerPleaseStopJUnitListener(final Notifier stoppable) {
+        commandsReader.addSkipNextTestsListener(new CommandListener() {
             @Override
-            public void update( Command command )
-            {
+            public void update(Command command) {
                 stoppable.pleaseStop();
             }
-        } );
+        });
     }
 
-    private JUnit4RunListener createRunListener( ReporterFactory reporterFactory, ConsoleStream consoleStream )
-        throws TestSetFailedException
-    {
-        if ( isSingleThreaded() )
-        {
-            NonConcurrentRunListener rm = new NonConcurrentRunListener( reporterFactory.createReporter() );
-            startCapture( rm );
+    private JUnit4RunListener createRunListener(ReporterFactory reporterFactory, ConsoleStream consoleStream)
+            throws TestSetFailedException {
+        if (isSingleThreaded()) {
+            NonConcurrentRunListener rm = new NonConcurrentRunListener(reporterFactory.createReporter());
+            startCapture(rm);
             return rm;
-        }
-        else
-        {
+        } else {
             final Map<String, TestSet> testSetMap = new ConcurrentHashMap<>();
 
-            ConcurrentRunListener listener = createInstance( testSetMap, reporterFactory, isParallelTypes(),
-                                                             isParallelMethodsAndTypes(), consoleStream );
-            startCapture( listener );
+            ConcurrentRunListener listener = createInstance(testSetMap, reporterFactory, isParallelTypes(),
+                    isParallelMethodsAndTypes(), consoleStream);
+            startCapture(listener);
 
-            return new JUnitCoreRunListener( listener, testSetMap );
+            return new JUnitCoreRunListener(listener, testSetMap);
         }
     }
 
-    private boolean isParallelMethodsAndTypes()
-    {
+    private boolean isParallelMethodsAndTypes() {
         return jUnitCoreParameters.isParallelMethods() && isParallelTypes();
     }
 
-    private boolean isParallelTypes()
-    {
+    private boolean isParallelTypes() {
         return jUnitCoreParameters.isParallelClasses() || jUnitCoreParameters.isParallelSuites();
     }
 
-    private Filter createJUnit48Filter()
-    {
-        final FilterFactory factory = new FilterFactory( testClassLoader );
+    private Filter createJUnit48Filter() {
+        final FilterFactory factory = new FilterFactory(testClassLoader);
         Map<String, String> props = providerParameters.getProviderProperties();
-        Filter groupFilter = factory.canCreateGroupFilter( props ) ? factory.createGroupFilter( props ) : null;
-        TestListResolver methodFilter = optionallyWildcardFilter( testResolver );
+        Filter groupFilter = factory.canCreateGroupFilter(props) ? factory.createGroupFilter(props) : null;
+        TestListResolver methodFilter = optionallyWildcardFilter(testResolver);
         boolean onlyGroups = methodFilter.isEmpty() || methodFilter.isWildcard();
-        if ( onlyGroups )
-        {
+        if (onlyGroups) {
             return groupFilter;
-        }
-        else
-        {
-            Filter jUnitMethodFilter = factory.createMethodFilter( methodFilter );
-            return groupFilter == null ? jUnitMethodFilter : factory.and( groupFilter, jUnitMethodFilter );
+        } else {
+            Filter jUnitMethodFilter = factory.createMethodFilter(methodFilter);
+            return groupFilter == null ? jUnitMethodFilter : factory.and(groupFilter, jUnitMethodFilter);
         }
     }
 
-    private TestsToRun scanClassPath()
-    {
-        TestsToRun scanned = scanResult.applyFilter( scannerFilter, testClassLoader );
-        return runOrderCalculator.orderTestClasses( scanned );
+    private TestsToRun scanClassPath() {
+        TestsToRun scanned = scanResult.applyFilter(scannerFilter, testClassLoader);
+        return runOrderCalculator.orderTestClasses(scanned);
     }
 }
